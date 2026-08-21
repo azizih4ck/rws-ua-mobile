@@ -99,7 +99,7 @@ jobs:
           app-id: ${{ secrets.RWS_APP_ID }}
           private-key: ${{ secrets.RWS_APP_PRIVATE_KEY }}
           owner: azizih4ck
-          repositories: rws-ua-bff
+          repositories: rws-ua-mobile
 
       - name: Configure RWS remote
         run: |
@@ -108,7 +108,7 @@ jobs:
           cd source-mirror
 
           git remote add rws \
-            "https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/azizih4ck/rws-ua-bff.git"
+            "https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/azizih4ck/rws-ua-mobile.git"
 
       - name: Mirror repository
         run: |
