@@ -1,0 +1,181 @@
+#version9 with Git LFS
+
+name: Mirror Deloitte GitHub to RWS GitHub
+
+on:
+  push:
+
+  delete:
+
+  workflow_dispatch:
+
+jobs:
+  mirror-to-rws:
+
+    name: Mirror Repository to RWS
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Show workflow context
+        run: |
+          echo "========================================"
+          echo "GitHub Actions Context"
+          echo "========================================"
+          echo "Repository : ${{ github.repository }}"
+          echo "Branch     : ${{ github.ref }}"
+          echo "Event      : ${{ github.event_name }}"
+          echo "SHA        : ${{ github.sha }}"
+          echo "========================================"
+
+      - name: Clone Deloitte repository
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+
+          git clone --mirror \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
+            source-mirror
+
+      - name: Configure Git
+        run: |
+          cd source-mirror
+
+          git config user.name "github-sync-bot"
+          git config user.email "github-sync-bot@users.noreply.github.com"
+
+      - name: Remove GitHub internal refs
+        run: |
+          set -e
+
+          cd source-mirror
+
+          echo "Removing GitHub pull request refs..."
+
+          git for-each-ref \
+            --format='%(refname)' \
+            refs/pull/ | while read ref; do
+
+              echo "Removing: $ref"
+              git update-ref -d "$ref"
+
+          done
+
+      - name: Check for Git LFS usage
+        id: lfs-check
+        run: |
+          cd source-mirror
+
+          if git show HEAD:.gitattributes 2>/dev/null | grep -q "filter=lfs"; then
+            echo "uses_lfs=true" >> "$GITHUB_OUTPUT"
+            echo "Repository uses Git LFS."
+          else
+            echo "uses_lfs=false" >> "$GITHUB_OUTPUT"
+            echo "No Git LFS usage detected."
+          fi
+
+      - name: Fetch LFS objects
+        if: steps.lfs-check.outputs.uses_lfs == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+
+          cd source-mirror
+
+          echo "Fetching all LFS objects from Deloitte..."
+          git lfs fetch --all
+
+      - name: Configure RWS remote
+        env:
+          RWS_GITHUB_USERNAME: ${{ secrets.RWS_GITHUB_USERNAME }}
+          RWS_GITHUB_TOKEN: ${{ secrets.RWS_GITHUB_TOKEN }}
+        run: |
+          set -e
+
+          cd source-mirror
+
+          git remote add rws \
+            "https://github.com/azizih4ck/rws-ua-bff.git"
+
+          git config http.https://github.com/.extraheader \
+            "AUTHORIZATION: basic $(printf '%s:%s' \
+            "$RWS_GITHUB_USERNAME" \
+            "$RWS_GITHUB_TOKEN" | base64 -w 0)"
+
+      - name: Mirror repository
+        run: |
+          set -e
+
+          cd source-mirror
+
+          echo "========================================"
+          echo "Mirroring Deloitte → RWS"
+          echo "========================================"
+
+          git push rws --mirror
+
+          echo "========================================"
+          echo "Mirror completed"
+          echo "========================================"
+
+      - name: Push LFS objects to RWS
+        if: steps.lfs-check.outputs.uses_lfs == 'true'
+        run: |
+          set -e
+
+          cd source-mirror
+
+          echo "Pushing all LFS objects to RWS..."
+          git lfs push --all rws
+
+      - name: Verify main SHA
+        run: |
+          set -e
+
+          cd source-mirror
+
+          SOURCE_SHA=$(git rev-parse refs/heads/main)
+
+          RWS_SHA=$(git ls-remote \
+            rws \
+            refs/heads/main | cut -f1)
+
+          echo "Source SHA: $SOURCE_SHA"
+          echo "RWS SHA:    $RWS_SHA"
+
+          if [ "$SOURCE_SHA" != "$RWS_SHA" ]; then
+            echo "::error::SHA mismatch on main"
+            exit 1
+          fi
+
+          echo "Verified: RWS main matches Deloitte main"
+
+      - name: Verify triggering ref SHA
+        if: github.event_name == 'push'
+        run: |
+          set -e
+
+          cd source-mirror
+
+          TRIGGER_REF="${{ github.ref }}"
+
+          if [ "$TRIGGER_REF" = "refs/heads/main" ]; then
+            echo "Triggering ref is main — already verified above, skipping."
+            exit 0
+          fi
+
+          SOURCE_SHA=$(git rev-parse "$TRIGGER_REF")
+          RWS_SHA=$(git ls-remote rws "$TRIGGER_REF" | cut -f1)
+
+          echo "Triggering ref: $TRIGGER_REF"
+          echo "Source SHA:     $SOURCE_SHA"
+          echo "RWS SHA:        $RWS_SHA"
+
+          if [ "$SOURCE_SHA" != "$RWS_SHA" ]; then
+            echo "::error::SHA mismatch on triggering ref $TRIGGER_REF"
+            exit 1
+          fi
+
+          echo "Verified: RWS $TRIGGER_REF matches Deloitte $TRIGGER_REF"
